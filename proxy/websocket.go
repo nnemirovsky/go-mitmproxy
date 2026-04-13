@@ -6,10 +6,36 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
 )
+
+var wsHandshakeHeaders = map[string]struct{}{
+	"Upgrade":                  {},
+	"Connection":               {},
+	"Sec-Websocket-Key":        {},
+	"Sec-Websocket-Version":    {},
+	"Sec-Websocket-Extensions": {},
+	"Sec-Websocket-Protocol":   {},
+}
+
+func cloneHeaderWithoutWSHandshake(h http.Header) http.Header {
+	out := make(http.Header, len(h))
+	for k, vals := range h {
+		if _, skip := wsHandshakeHeaders[http.CanonicalHeaderKey(k)]; skip {
+			continue
+		}
+		if strings.EqualFold(k, "Host") {
+			continue
+		}
+		cloned := make([]string, len(vals))
+		copy(cloned, vals)
+		out[k] = cloned
+	}
+	return out
+}
 
 type webSocketHandler struct {
 	proxy *Proxy
@@ -250,9 +276,9 @@ func (h *webSocketHandler) handleWSS(res http.ResponseWriter, req *http.Request)
 		},
 	}
 
-	// Dialer 会自动添加所有必需的 WebSocket 握手头
-	// 我们不传递 req.Header，避免重复头的错误
-	serverWS, _, err := dialer.Dial(serverURL, nil)
+	// 传递 addon 可能修改过的 headers（去除 Dialer 会重新生成的握手 headers）
+	upstreamHeader := cloneHeaderWithoutWSHandshake(req.Header)
+	serverWS, _, err := dialer.Dial(serverURL, upstreamHeader)
 	if err != nil {
 		log.Errorf("Failed to dial WSS server: %v", err)
 		return err
